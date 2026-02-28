@@ -111,10 +111,9 @@ with tab1:
     st.pyplot(fig_corr)
     plt.close()
     
-    # Feature distributions - Fixed version
+    # Feature distributions - using matplotlib
     st.subheader("Feature Distributions")
     
-    # Create individual histograms instead of subplots to avoid the error
     cols = df.columns.tolist()
     n_cols = 3
     n_rows = (len(cols) + n_cols - 1) // n_cols
@@ -246,6 +245,7 @@ with tab3:
                 labels = model.fit_predict(X_scaled)
                 st.session_state['model'] = model
                 st.session_state['model_name'] = "K-Means"
+                st.session_state['labels'] = labels
                 
     elif model_type == "Agglomerative Clustering":
         n_clusters = st.slider("Number of clusters", 2, 10, 3)
@@ -257,6 +257,7 @@ with tab3:
                 labels = model.fit_predict(X_scaled)
                 st.session_state['model'] = model
                 st.session_state['model_name'] = "Agglomerative"
+                st.session_state['labels'] = labels
                 
     elif model_type == "DBSCAN":
         eps = st.slider("Epsilon (ε)", 0.1, 2.0, 0.5)
@@ -268,6 +269,7 @@ with tab3:
                 labels = model.fit_predict(X_scaled)
                 st.session_state['model'] = model
                 st.session_state['model_name'] = "DBSCAN"
+                st.session_state['labels'] = labels
                 
     else:  # Gaussian Mixture
         n_components = st.slider("Number of components", 2, 10, 3)
@@ -279,10 +281,11 @@ with tab3:
                 labels = model.fit_predict(X_scaled)
                 st.session_state['model'] = model
                 st.session_state['model_name'] = "GMM"
+                st.session_state['labels'] = labels
     
     # Display results if model has been run
-    if 'labels' in locals():
-        st.session_state['labels'] = labels
+    if st.session_state['labels'] is not None:
+        labels = st.session_state['labels']
         
         # Calculate silhouette score
         unique_labels = len(set(labels))
@@ -332,29 +335,43 @@ with tab4:
     X = df[st.session_state['selected_features']]
     labels = st.session_state['labels']
     
-    # Parallel coordinates plot
-    st.subheader("Parallel Coordinates Plot")
-    
-    df_plot = X.copy()
-    df_plot['Cluster'] = labels.astype(str)
-    
-    fig_parallel = px.parallel_coordinates(
-        df_plot,
-        color='Cluster',
-        dimensions=st.session_state['selected_features'],
-        color_continuous_scale=px.colors.qualitative.Set1
-    )
-    st.plotly_chart(fig_parallel, use_container_width=True)
-    
-    # Cluster profiles
-    st.subheader("Cluster Profiles")
+    # Radar Chart for Cluster Profiles (instead of parallel coordinates)
+    st.subheader("Cluster Profiles - Radar Chart")
     
     # Calculate mean values per cluster
     cluster_profiles = X.copy()
     cluster_profiles['Cluster'] = labels
     profiles = cluster_profiles.groupby('Cluster').mean()
     
-    # Display as dataframe
+    # Normalize for radar chart
+    profiles_norm = (profiles - profiles.min()) / (profiles.max() - profiles.min())
+    
+    # Create radar chart
+    fig_radar = go.Figure()
+    
+    for cluster in profiles_norm.index:
+        if cluster == -1:  # Skip noise for radar chart
+            continue
+        fig_radar.add_trace(go.Scatterpolar(
+            r=profiles_norm.loc[cluster].values,
+            theta=profiles_norm.columns,
+            fill='toself',
+            name=f'Cluster {cluster}'
+        ))
+    
+    fig_radar.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 1]
+            )),
+        showlegend=True,
+        title="Cluster Profiles (Normalized)"
+    )
+    st.plotly_chart(fig_radar, use_container_width=True)
+    
+    # Display profiles as dataframe
+    st.subheader("Cluster Mean Values")
     st.dataframe(profiles.style.highlight_max(axis=0))
     
     # Heatmap of profiles
@@ -363,7 +380,7 @@ with tab4:
         text_auto='.0f',
         aspect="auto",
         color_continuous_scale='RdBu_r',
-        title="Cluster Profiles (Mean Values)",
+        title="Cluster Profiles Heatmap (Mean Values)",
         labels={'x': 'Cluster', 'y': 'Features'}
     )
     st.plotly_chart(fig_heatmap, use_container_width=True)
@@ -386,7 +403,7 @@ with tab4:
     st.plotly_chart(fig_box, use_container_width=True)
     
     # 3D visualization if enough PCA components
-    if st.session_state['X_pca'].shape[1] >= 3:
+    if st.session_state['X_pca'] is not None and st.session_state['X_pca'].shape[1] >= 3:
         st.subheader("3D Cluster Visualization")
         
         X_pca = st.session_state['X_pca']
@@ -398,6 +415,22 @@ with tab4:
             labels={'x': 'PC1', 'y': 'PC2', 'z': 'PC3', 'color': 'Cluster'}
         )
         st.plotly_chart(fig_3d, use_container_width=True)
+    
+    # Pairplot alternative using scatter matrix
+    st.subheader("Feature Pairwise Relationships")
+    
+    # Sample data for better performance
+    df_sample = df_box.sample(min(500, len(df_box)))
+    
+    fig_scatter_matrix = px.scatter_matrix(
+        df_sample,
+        dimensions=st.session_state['selected_features'][:4],  # Limit to 4 features for readability
+        color='Cluster',
+        title="Scatter Matrix of Selected Features",
+        opacity=0.5
+    )
+    fig_scatter_matrix.update_traces(diagonal_visible=False)
+    st.plotly_chart(fig_scatter_matrix, use_container_width=True)
 
 with tab5:
     st.header("Model Export")
@@ -451,6 +484,10 @@ with tab5:
     
     for cluster in cluster_means.index:
         if cluster == -1:  # Skip noise points for DBSCAN
+            st.markdown(f"**Cluster -1 (Noise Points)**")
+            cluster_size = len(results_df[results_df['Cluster'] == cluster])
+            st.markdown(f"- {cluster_size} customers identified as noise/outliers")
+            st.markdown("---")
             continue
             
         with st.expander(f"**Cluster {cluster}**"):
@@ -468,10 +505,10 @@ with tab5:
             
             # Cluster size
             cluster_size = len(results_df[results_df['Cluster'] == cluster])
-            total_size = len(results_df)
-            percentage = (cluster_size / total_size) * 100
+            total_size = len(results_df[results_df['Cluster'] != -1])  # Exclude noise for percentage
+            percentage = (cluster_size / total_size) * 100 if total_size > 0 else 0
             
-            st.markdown(f"- **Size:** {cluster_size} customers ({percentage:.1f}% of total)")
+            st.markdown(f"- **Size:** {cluster_size} customers ({percentage:.1f}% of non-noise customers)")
             
             # Key characteristics
             st.markdown("**Key characteristics:**")
@@ -513,3 +550,12 @@ st.sidebar.markdown("""
 5. Visualize results in Tab 4
 6. Export results in Tab 5
 """)
+
+# Display current model info if available
+if st.session_state['model_name'] is not None:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Current Model")
+    st.sidebar.info(f"**{st.session_state['model_name']}**")
+    if st.session_state['labels'] is not None:
+        n_clusters = len(set(st.session_state['labels']) - {-1})
+        st.sidebar.markdown(f"Clusters: {n_clusters}")
