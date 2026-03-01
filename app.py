@@ -1,4 +1,3 @@
-# main.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,8 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
-from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
-from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 import joblib
@@ -209,10 +207,10 @@ with tab3:
     X_scaled = st.session_state['X_scaled']
     X_pca = st.session_state['X_pca']
     
-    # Model selection
+    # Model selection - Only K-Means and Hierarchical
     model_type = st.selectbox(
         "Select Clustering Algorithm",
-        ["K-Means", "Agglomerative Clustering", "DBSCAN", "Gaussian Mixture"]
+        ["K-Means", "Hierarchical Clustering"]
     )
     
     # Model parameters
@@ -247,40 +245,16 @@ with tab3:
                 st.session_state['model_name'] = "K-Means"
                 st.session_state['labels'] = labels
                 
-    elif model_type == "Agglomerative Clustering":
+    else:  # Hierarchical Clustering (Agglomerative)
         n_clusters = st.slider("Number of clusters", 2, 10, 3)
         linkage = st.selectbox("Linkage method", ["ward", "complete", "average", "single"])
         
-        if st.button("Run Agglomerative Clustering"):
+        if st.button("Run Hierarchical Clustering"):
             with st.spinner("Running Hierarchical clustering..."):
                 model = AgglomerativeClustering(n_clusters=n_clusters, linkage=linkage)
                 labels = model.fit_predict(X_scaled)
                 st.session_state['model'] = model
-                st.session_state['model_name'] = "Agglomerative"
-                st.session_state['labels'] = labels
-                
-    elif model_type == "DBSCAN":
-        eps = st.slider("Epsilon (ε)", 0.1, 2.0, 0.5)
-        min_samples = st.slider("Minimum samples", 2, 20, 5)
-        
-        if st.button("Run DBSCAN"):
-            with st.spinner("Running DBSCAN clustering..."):
-                model = DBSCAN(eps=eps, min_samples=min_samples)
-                labels = model.fit_predict(X_scaled)
-                st.session_state['model'] = model
-                st.session_state['model_name'] = "DBSCAN"
-                st.session_state['labels'] = labels
-                
-    else:  # Gaussian Mixture
-        n_components = st.slider("Number of components", 2, 10, 3)
-        covariance_type = st.selectbox("Covariance type", ["full", "tied", "diag", "spherical"])
-        
-        if st.button("Run Gaussian Mixture"):
-            with st.spinner("Running Gaussian Mixture Model..."):
-                model = GaussianMixture(n_components=n_components, covariance_type=covariance_type, random_state=42)
-                labels = model.fit_predict(X_scaled)
-                st.session_state['model'] = model
-                st.session_state['model_name'] = "GMM"
+                st.session_state['model_name'] = "Hierarchical"
                 st.session_state['labels'] = labels
     
     # Display results if model has been run
@@ -292,12 +266,6 @@ with tab3:
         if unique_labels > 1 and unique_labels < len(X_scaled):
             sil_score = silhouette_score(X_scaled, labels)
             st.metric("Silhouette Score", f"{sil_score:.3f}")
-            
-            # Color mapping for noise points in DBSCAN
-            if -1 in labels:
-                st.info(f"ℹ️ DBSCAN found {list(labels).count(-1)} noise points (labeled as -1)")
-        else:
-            st.warning("⚠️ Silhouette score cannot be calculated (only one cluster or all points are noise).")
         
         # Cluster distribution
         cluster_counts = pd.Series(labels).value_counts().sort_index()
@@ -335,7 +303,7 @@ with tab4:
     X = df[st.session_state['selected_features']]
     labels = st.session_state['labels']
     
-    # Radar Chart for Cluster Profiles (instead of parallel coordinates)
+    # Radar Chart for Cluster Profiles
     st.subheader("Cluster Profiles - Radar Chart")
     
     # Calculate mean values per cluster
@@ -350,8 +318,6 @@ with tab4:
     fig_radar = go.Figure()
     
     for cluster in profiles_norm.index:
-        if cluster == -1:  # Skip noise for radar chart
-            continue
         fig_radar.add_trace(go.Scatterpolar(
             r=profiles_norm.loc[cluster].values,
             theta=profiles_norm.columns,
@@ -431,6 +397,29 @@ with tab4:
     )
     fig_scatter_matrix.update_traces(diagonal_visible=False)
     st.plotly_chart(fig_scatter_matrix, use_container_width=True)
+    
+    # Dendrogram for Hierarchical Clustering
+    if st.session_state['model_name'] == "Hierarchical" and st.checkbox("Show Dendrogram"):
+        st.subheader("Dendrogram")
+        
+        from scipy.cluster.hierarchy import dendrogram, linkage
+        
+        # Sample data for dendrogram (to avoid overcrowding)
+        sample_size = min(100, len(X_scaled))
+        indices = np.random.choice(len(X_scaled), sample_size, replace=False)
+        X_sample = X_scaled[indices]
+        
+        # Compute linkage
+        linkage_matrix = linkage(X_sample, method=linkage if 'linkage' in locals() else 'ward')
+        
+        # Create dendrogram
+        fig_dend, ax_dend = plt.subplots(figsize=(12, 6))
+        dendrogram(linkage_matrix, ax=ax_dend, truncate_mode='level', p=5)
+        plt.title("Hierarchical Clustering Dendrogram")
+        plt.xlabel("Sample Index")
+        plt.ylabel("Distance")
+        st.pyplot(fig_dend)
+        plt.close()
 
 with tab5:
     st.header("Model Export")
@@ -483,13 +472,6 @@ with tab5:
     cluster_means = results_df.groupby('Cluster')[st.session_state['selected_features']].mean()
     
     for cluster in cluster_means.index:
-        if cluster == -1:  # Skip noise points for DBSCAN
-            st.markdown(f"**Cluster -1 (Noise Points)**")
-            cluster_size = len(results_df[results_df['Cluster'] == cluster])
-            st.markdown(f"- {cluster_size} customers identified as noise/outliers")
-            st.markdown("---")
-            continue
-            
         with st.expander(f"**Cluster {cluster}**"):
             # Find top spending category
             top_category = cluster_means.loc[cluster].idxmax()
@@ -505,10 +487,10 @@ with tab5:
             
             # Cluster size
             cluster_size = len(results_df[results_df['Cluster'] == cluster])
-            total_size = len(results_df[results_df['Cluster'] != -1])  # Exclude noise for percentage
-            percentage = (cluster_size / total_size) * 100 if total_size > 0 else 0
+            total_size = len(results_df)
+            percentage = (cluster_size / total_size) * 100
             
-            st.markdown(f"- **Size:** {cluster_size} customers ({percentage:.1f}% of non-noise customers)")
+            st.markdown(f"- **Size:** {cluster_size} customers ({percentage:.1f}% of total)")
             
             # Key characteristics
             st.markdown("**Key characteristics:**")
@@ -523,19 +505,17 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### About")
 st.sidebar.info(
     """
-    This app performs customer segmentation using various clustering algorithms.
+    This app performs customer segmentation using clustering algorithms.
     
     **Features:**
     - Data exploration
-    - Multiple clustering algorithms
+    - K-Means and Hierarchical clustering
     - Interactive visualizations
     - Model export
     
     **Algorithms:**
     - K-Means
-    - Hierarchical Clustering
-    - DBSCAN
-    - Gaussian Mixture Models
+    - Hierarchical Clustering (Agglomerative)
     """
 )
 
@@ -546,7 +526,7 @@ st.sidebar.markdown("""
 1. Upload your dataset or use the default
 2. Explore data in Tab 1
 3. Select features and scale in Tab 2
-4. Choose algorithm and run clustering in Tab 3
+4. Choose algorithm (K-Means or Hierarchical) and run clustering in Tab 3
 5. Visualize results in Tab 4
 6. Export results in Tab 5
 """)
@@ -557,5 +537,5 @@ if st.session_state['model_name'] is not None:
     st.sidebar.markdown("### Current Model")
     st.sidebar.info(f"**{st.session_state['model_name']}**")
     if st.session_state['labels'] is not None:
-        n_clusters = len(set(st.session_state['labels']) - {-1})
+        n_clusters = len(set(st.session_state['labels']))
         st.sidebar.markdown(f"Clusters: {n_clusters}")
