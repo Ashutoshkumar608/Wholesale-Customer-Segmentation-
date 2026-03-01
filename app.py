@@ -280,6 +280,7 @@ with tab4:
     
     X = df[st.session_state['selected_features']]
     X_pca = st.session_state['X_pca']
+    X_scaled = st.session_state['X_scaled']
     
     kmeans_labels = st.session_state['kmeans_labels']
     hierarchical_labels = st.session_state['hierarchical_labels']
@@ -288,81 +289,57 @@ with tab4:
         st.warning("⚠️ Please run at least one clustering algorithm in Tab 3.")
         st.stop()
     
-    # Algorithm selection for display
-    display_options = []
-    if kmeans_labels is not None:
-        display_options.append("K-Means")
-    if hierarchical_labels is not None:
-        display_options.append("Hierarchical")
-    
-    selected_display = st.multiselect(
-        "Select algorithms to compare",
-        options=display_options,
-        default=display_options
+    # Create DataFrames for visualization
+    pca_df = pd.DataFrame(
+        X_pca[:, :2], 
+        columns=['PC1', 'PC2']
     )
     
-    # Side by side PCA visualizations
-    if len(selected_display) > 0:
-        st.subheader("PCA Projection Comparison")
-        
-        # Create subplot
-        fig = make_subplots(
-            rows=1, cols=len(selected_display),
-            subplot_titles=selected_display,
-            shared_yaxes=True
-        )
-        
-        color_sequences = px.colors.qualitative.Set1
-        
-        for i, algo in enumerate(selected_display, 1):
-            if algo == "K-Means":
-                labels = kmeans_labels
-            else:
-                labels = hierarchical_labels
-            
-            # Convert labels to strings for categorical coloring
-            labels_str = labels.astype(str)
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=X_pca[:, 0],
-                    y=X_pca[:, 1],
-                    mode='markers',
-                    marker=dict(
-                        color=labels_str,
-                        colorscale='Viridis',
-                        showscale=False
-                    ),
-                    text=[f"Point {j}<br>Cluster: {labels[j]}" for j in range(len(X_pca))],
-                    name=f'{algo} Clusters',
-                    showlegend=False
-                ),
-                row=1, col=i
+    # Side by side PCA visualizations using plotly express
+    st.subheader("PCA Projection Comparison")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if kmeans_labels is not None:
+            pca_df_kmeans = pca_df.copy()
+            pca_df_kmeans['Cluster'] = kmeans_labels.astype(str)
+            fig_kmeans = px.scatter(
+                pca_df_kmeans, 
+                x='PC1', y='PC2', 
+                color='Cluster',
+                title="K-Means Clustering Results",
+                color_discrete_sequence=px.colors.qualitative.Set1,
+                category_orders={"Cluster": sorted(pca_df_kmeans['Cluster'].unique())}
             )
-        
-        fig.update_layout(
-            height=500,
-            title_text="Clustering Results Comparison"
-        )
-        fig.update_xaxes(title_text="PC1")
-        fig.update_yaxes(title_text="PC2")
-        
-        st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig_kmeans, use_container_width=True)
+    
+    with col2:
+        if hierarchical_labels is not None:
+            pca_df_hier = pca_df.copy()
+            pca_df_hier['Cluster'] = hierarchical_labels.astype(str)
+            fig_hier = px.scatter(
+                pca_df_hier, 
+                x='PC1', y='PC2', 
+                color='Cluster',
+                title="Hierarchical Clustering Results",
+                color_discrete_sequence=px.colors.qualitative.Set1,
+                category_orders={"Cluster": sorted(pca_df_hier['Cluster'].unique())}
+            )
+            st.plotly_chart(fig_hier, use_container_width=True)
     
     # Cluster distribution comparison
-    if len(selected_display) > 1:
+    if kmeans_labels is not None and hierarchical_labels is not None:
         st.subheader("Cluster Distribution Comparison")
         
         dist_data = []
-        if "K-Means" in selected_display:
-            kmeans_counts = pd.Series(kmeans_labels).value_counts().sort_index()
-            for cluster, count in kmeans_counts.items():
-                dist_data.append({"Algorithm": "K-Means", "Cluster": f"Cluster {cluster}", "Count": count})
+        kmeans_counts = pd.Series(kmeans_labels).value_counts().sort_index()
+        for cluster, count in kmeans_counts.items():
+            dist_data.append({"Algorithm": "K-Means", "Cluster": f"Cluster {cluster}", "Count": count})
         
-        if "Hierarchical" in selected_display:
-            hier_counts = pd.Series(hierarchical_labels).value_counts().sort_index()
-            for cluster, count in hier_counts.items():
-                dist_data.append({"Algorithm": "Hierarchical", "Cluster": f"Cluster {cluster}", "Count": count})
+        hier_counts = pd.Series(hierarchical_labels).value_counts().sort_index()
+        for cluster, count in hier_counts.items():
+            dist_data.append({"Algorithm": "Hierarchical", "Cluster": f"Cluster {cluster}", "Count": count})
         
         dist_df = pd.DataFrame(dist_data)
         
@@ -378,17 +355,16 @@ with tab4:
         st.plotly_chart(fig_dist_comp, use_container_width=True)
     
     # Silhouette Score Comparison
-    if len(selected_display) > 1:
+    if kmeans_labels is not None and hierarchical_labels is not None:
         st.subheader("Silhouette Score Comparison")
         
         sil_scores = []
-        X_scaled = st.session_state['X_scaled']
         
-        if "K-Means" in selected_display and len(set(kmeans_labels)) > 1:
+        if len(set(kmeans_labels)) > 1:
             sil_kmeans = silhouette_score(X_scaled, kmeans_labels)
             sil_scores.append({"Algorithm": "K-Means", "Silhouette Score": sil_kmeans})
         
-        if "Hierarchical" in selected_display and len(set(hierarchical_labels)) > 1:
+        if len(set(hierarchical_labels)) > 1:
             sil_hier = silhouette_score(X_scaled, hierarchical_labels)
             sil_scores.append({"Algorithm": "Hierarchical", "Silhouette Score": sil_hier})
         
@@ -409,7 +385,7 @@ with tab4:
     # Radar Charts Comparison
     st.subheader("Cluster Profiles Comparison")
     
-    if "K-Means" in selected_display:
+    if kmeans_labels is not None:
         st.markdown("**K-Means Cluster Profiles**")
         kmeans_profiles = X.copy()
         kmeans_profiles['Cluster'] = kmeans_labels
@@ -434,7 +410,7 @@ with tab4:
         )
         st.plotly_chart(fig_kmeans_radar, use_container_width=True)
     
-    if "Hierarchical" in selected_display:
+    if hierarchical_labels is not None:
         st.markdown("**Hierarchical Cluster Profiles**")
         hier_profiles = X.copy()
         hier_profiles['Cluster'] = hierarchical_labels
@@ -465,14 +441,14 @@ with tab4:
     selected_feature = st.selectbox("Select feature to compare", st.session_state['selected_features'])
     
     comp_data = []
-    if "K-Means" in selected_display:
+    if kmeans_labels is not None:
         temp_df = X[[selected_feature]].copy()
         temp_df['Algorithm'] = 'K-Means'
         temp_df['Cluster'] = kmeans_labels.astype(str)
         temp_df['Value'] = temp_df[selected_feature]
         comp_data.append(temp_df[['Algorithm', 'Cluster', 'Value']])
     
-    if "Hierarchical" in selected_display:
+    if hierarchical_labels is not None:
         temp_df = X[[selected_feature]].copy()
         temp_df['Algorithm'] = 'Hierarchical'
         temp_df['Cluster'] = hierarchical_labels.astype(str)
