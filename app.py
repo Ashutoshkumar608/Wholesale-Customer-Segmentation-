@@ -70,6 +70,8 @@ if 'kmeans_model' not in st.session_state:
     st.session_state['kmeans_model'] = None
 if 'hierarchical_model' not in st.session_state:
     st.session_state['hierarchical_model'] = None
+if 'pca' not in st.session_state:
+    st.session_state['pca'] = None
 
 # Main content tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -117,7 +119,6 @@ with tab1:
     
     cols = df.columns.tolist()
     n_cols = 3
-    n_rows = (len(cols) + n_cols - 1) // n_cols
     
     for i in range(0, len(cols), n_cols):
         row_cols = st.columns(n_cols)
@@ -175,6 +176,7 @@ with tab2:
         pca = PCA(n_components=n_components)
         X_pca = pca.fit_transform(X_scaled)
         st.session_state['X_pca'] = X_pca
+        st.session_state['pca'] = pca
         
         # Explained variance
         explained_var = pca.explained_variance_ratio_
@@ -235,14 +237,12 @@ with tab3:
     with col2:
         st.subheader("Hierarchical Clustering")
         linkage_method = st.selectbox("Linkage method", ["ward", "complete", "average", "single"], key="hier_linkage")
-        metric = st.selectbox("Distance metric", ["euclidean", "l1", "l2", "manhattan", "cosine"], key="hier_metric")
         
         if st.button("Run Hierarchical", key="run_hierarchical"):
             with st.spinner("Running Hierarchical clustering..."):
                 hierarchical_model = AgglomerativeClustering(
                     n_clusters=n_clusters, 
-                    linkage=linkage_method,
-                    metric=metric
+                    linkage=linkage_method
                 )
                 hierarchical_labels = hierarchical_model.fit_predict(X_scaled)
                 st.session_state['hierarchical_model'] = hierarchical_model
@@ -279,7 +279,6 @@ with tab4:
         st.stop()
     
     X = df[st.session_state['selected_features']]
-    X_scaled = st.session_state['X_scaled']
     X_pca = st.session_state['X_pca']
     
     kmeans_labels = st.session_state['kmeans_labels']
@@ -306,12 +305,14 @@ with tab4:
     if len(selected_display) > 0:
         st.subheader("PCA Projection Comparison")
         
-        # Create subplot with 1 row and 2 columns
+        # Create subplot
         fig = make_subplots(
             rows=1, cols=len(selected_display),
             subplot_titles=selected_display,
             shared_yaxes=True
         )
+        
+        color_sequences = px.colors.qualitative.Set1
         
         for i, algo in enumerate(selected_display, 1):
             if algo == "K-Means":
@@ -319,25 +320,28 @@ with tab4:
             else:
                 labels = hierarchical_labels
             
+            # Convert labels to strings for categorical coloring
+            labels_str = labels.astype(str)
+            
             fig.add_trace(
                 go.Scatter(
                     x=X_pca[:, 0],
                     y=X_pca[:, 1],
                     mode='markers',
                     marker=dict(
-                        color=labels.astype(str),
-                        colorscale='Set1',
+                        color=labels_str,
+                        colorscale='Viridis',
                         showscale=False
                     ),
-                    text=[f"Point {j}" for j in range(len(X_pca))],
-                    name=f'{algo} Clusters'
+                    text=[f"Point {j}<br>Cluster: {labels[j]}" for j in range(len(X_pca))],
+                    name=f'{algo} Clusters',
+                    showlegend=False
                 ),
                 row=1, col=i
             )
         
         fig.update_layout(
             height=500,
-            showlegend=False,
             title_text="Clustering Results Comparison"
         )
         fig.update_xaxes(title_text="PC1")
@@ -378,6 +382,8 @@ with tab4:
         st.subheader("Silhouette Score Comparison")
         
         sil_scores = []
+        X_scaled = st.session_state['X_scaled']
+        
         if "K-Means" in selected_display and len(set(kmeans_labels)) > 1:
             sil_kmeans = silhouette_score(X_scaled, kmeans_labels)
             sil_scores.append({"Algorithm": "K-Means", "Silhouette Score": sil_kmeans})
@@ -415,8 +421,8 @@ with tab4:
         fig_kmeans_radar = go.Figure()
         for cluster in kmeans_norm.index:
             fig_kmeans_radar.add_trace(go.Scatterpolar(
-                r=kmeans_norm.loc[cluster].values,
-                theta=kmeans_norm.columns,
+                r=kmeans_norm.loc[cluster].values.tolist(),
+                theta=kmeans_norm.columns.tolist(),
                 fill='toself',
                 name=f'Cluster {cluster}'
             ))
@@ -440,8 +446,8 @@ with tab4:
         fig_hier_radar = go.Figure()
         for cluster in hier_norm.index:
             fig_hier_radar.add_trace(go.Scatterpolar(
-                r=hier_norm.loc[cluster].values,
-                theta=hier_norm.columns,
+                r=hier_norm.loc[cluster].values.tolist(),
+                theta=hier_norm.columns.tolist(),
                 fill='toself',
                 name=f'Cluster {cluster}'
             ))
@@ -510,7 +516,6 @@ with tab4:
         fig_cm.update_xaxes(side="bottom")
         st.plotly_chart(fig_cm, use_container_width=True)
         
-        # Add interpretation
         st.markdown("""
         **How to interpret:** Each row shows how K-Means clusters map to Hierarchical clusters.
         - Values close to 1 indicate strong agreement between clusters
